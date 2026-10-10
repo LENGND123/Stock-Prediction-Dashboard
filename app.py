@@ -1,8 +1,17 @@
 from flask import Flask, render_template, request, jsonify
 from utils.stock_data import get_stock_data, get_historical_data, get_candlestick_data
 from utils.model import predict_next_price
+from utils.forecast_monitor import (
+    seed_initial_history_if_empty,
+    record_forecast,
+    match_observed_prices,
+    calculate_rolling_accuracy,
+    get_deterioration_alerts,
+    get_forecast_history_records
+)
 
 app = Flask(__name__)
+seed_initial_history_if_empty()
 
 # Default watchlist / popular tickers
 SYMBOLS = {
@@ -82,6 +91,23 @@ def prediction():
     diff = round(pred_price - stock["price"], 2)
     pct_diff = round((diff / stock["price"]) * 100, 2)
 
+    # Match any due pending forecasts and record new live published forecasts
+    try:
+        match_observed_prices(symbol)
+        for m_name, m_res in model_results.items():
+            record_forecast(
+                symbol=symbol,
+                model_name=m_name,
+                predicted_price=m_res["predicted_price"],
+                base_price=stock["price"],
+                validation_metrics={"mae": m_res["mae"], "rmse": m_res["rmse"], "r2": m_res["r2"]}
+            )
+    except Exception as e:
+        print(f"Monitor record warning: {e}")
+
+    live_metrics = calculate_rolling_accuracy(symbol=symbol, model_name=selected_model)
+    deterioration_alerts = get_deterioration_alerts(symbol=symbol)
+
     if pct_diff > 1.5:
         signal = "Strong Buy 🟢🟢"
         badge_class = "success"
@@ -104,14 +130,57 @@ def prediction():
         selected_symbol=symbol,
         symbols=display_symbols,
         model_results=model_results,
+        model_data=model_data,
         selected_model=selected_model,
         predicted_price=pred_price,
         prediction_difference=diff,
         prediction_pct=pct_diff,
         signal=signal,
         badge_class=badge_class,
+        live_metrics=live_metrics,
+        deterioration_alerts=deterioration_alerts,
         error=error_msg
     )
+
+@app.route("/forecast-monitor")
+def forecast_monitor():
+    seed_initial_history_if_empty()
+    symbol = request.args.get("symbol", "AAPL").upper().strip()
+    model_filter = request.args.get("model", "all")
+    display_symbols = SYMBOLS.copy()
+
+    try:
+        match_observed_prices(symbol if symbol != "ALL" else None)
+    except Exception:
+        pass
+
+    sym_filter = symbol if symbol != "ALL" else None
+    lr_stats = calculate_rolling_accuracy(symbol=sym_filter, model_name="linear_regression")
+    rf_stats = calculate_rolling_accuracy(symbol=sym_filter, model_name="random_forest")
+    alerts = get_deterioration_alerts(symbol=sym_filter)
+    history = get_forecast_history_records(
+        symbol=sym_filter,
+        model_name=model_filter if model_filter != "all" else None,
+        limit=60
+    )
+
+    return render_template(
+        "forecast_monitor.html",
+        selected_symbol=symbol,
+        model_filter=model_filter,
+        symbols=display_symbols,
+        lr_stats=lr_stats,
+        rf_stats=rf_stats,
+        alerts=alerts,
+        history=history
+    )
+
+@app.route("/api/forecast-monitor/match", methods=["POST", "GET"])
+def api_forecast_match():
+    symbol = request.args.get("symbol")
+    sym = None if not symbol or symbol == "ALL" else symbol
+    resolved = match_observed_prices(sym)
+    return jsonify({"status": "success", "resolved_count": resolved})
 
 @app.route("/analytics")
 def analytics():

@@ -52,6 +52,11 @@
                 </a>
             </li>
             <li>
+                <a class="nav-link-item {% if request.path == '/forecast-monitor' %}active{% endif %}" href="/forecast-monitor">
+                    <i class="bi bi-shield-check"></i> Quality Monitor
+                </a>
+            </li>
+            <li>
                 <a class="nav-link-item {% if request.path == '/about' %}active{% endif %}" href="/about">
                     <i class="bi bi-info-circle"></i> About
                 </a>

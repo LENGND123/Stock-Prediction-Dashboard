@@ -1,0 +1,377 @@
+{% extends "base.html" %}
+
+{% block title %}Forecast Quality Monitor - StockAI{% endblock %}
+
+{% block content %}
+
+<!-- Header and Controls -->
+<div class="row align-items-center mb-4">
+    <div class="col-md-7 col-sm-12">
+        <h1 class="mb-0 fw-extrabold text-white">
+            <i class="bi bi-shield-check text-primary"></i> Forecast Quality Monitor
+        </h1>
+        <p class="text-secondary mt-1">
+            Track published forecasts against actual market closes, monitor rolling accuracy drift, and detect performance deterioration.
+        </p>
+    </div>
+    <div class="col-md-5 col-sm-12 text-md-end mt-3 mt-md-0 d-flex gap-2 justify-content-md-end align-items-center flex-wrap">
+        <button id="syncPricesBtn" class="btn btn-outline-primary btn-sm px-3" onclick="syncObservedPrices()">
+            <i class="bi bi-arrow-repeat"></i> Match Observed Prices
+        </button>
+        <div class="dropdown">
+            <button class="btn btn-dark border-secondary dropdown-toggle btn-sm px-3" type="button" data-bs-toggle="dropdown">
+                Asset: <strong class="text-white">{{ selected_symbol }}</strong>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-dark dropdown-menu-end shadow">
+                <li><a class="dropdown-item {% if selected_symbol == 'ALL' %}active{% endif %}" href="/forecast-monitor?symbol=ALL&model={{ model_filter }}">ALL ASSETS</a></li>
+                <li><hr class="dropdown-divider border-secondary"></li>
+                {% for sym, name in symbols.items() %}
+                <li><a class="dropdown-item {% if selected_symbol == sym %}active{% endif %}" href="/forecast-monitor?symbol={{ sym }}&model={{ model_filter }}">{{ sym }} - {{ name }}</a></li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+</div>
+
+<!-- Performance Deterioration Detection Alerts -->
+{% if alerts and alerts|length > 0 %}
+    {% for alert in alerts %}
+    <div class="alert alert-{{ alert.level }} border-0 shadow mb-4" role="alert" style="border-radius: 12px; background: rgba(239, 68, 68, 0.12); border-left: 5px solid var(--color-danger) !important;">
+        <div class="d-flex align-items-start gap-3">
+            <i class="bi bi-exclamation-triangle-fill fs-2 text-danger"></i>
+            <div class="flex-grow-1">
+                <div class="d-flex align-items-center gap-2 flex-wrap mb-1">
+                    <span class="badge bg-danger text-uppercase px-2 py-1">Performance Deterioration</span>
+                    <span class="badge bg-dark border border-secondary text-white font-monospace">{{ alert.symbol }}</span>
+                    <span class="badge bg-dark border border-secondary text-white">{{ alert.model_display }}</span>
+                    <span class="badge bg-dark border border-secondary text-secondary">Horizon: {{ alert.horizon }}</span>
+                </div>
+                <h6 class="text-white fw-bold mb-1">{{ alert.message }}</h6>
+                <p class="text-secondary mb-2" style="font-size: 13.5px;">{{ alert.recommendation }}</p>
+                <div class="d-flex gap-4 flex-wrap text-white" style="font-size: 13px;">
+                    <div><span class="text-secondary">Validation Baseline MAE:</span> <strong>${{ alert.baseline_mae }}</strong></div>
+                    <div><span class="text-secondary">Live Rolling MAE:</span> <strong class="text-danger">${{ alert.live_mae }}</strong></div>
+                    <div><span class="text-secondary">Error Increase:</span> <strong class="text-danger">+{{ alert.degradation_pct }}%</strong></div>
+                    <div><span class="text-secondary">Evaluated Sample:</span> <strong>{{ alert.sample_size }} resolved forecasts</strong></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="card p-3 mb-4 border-0" style="background: rgba(16, 185, 129, 0.08); border-left: 4px solid var(--color-success) !important;">
+        <div class="d-flex align-items-center gap-3">
+            <i class="bi bi-check-circle-fill text-success fs-3"></i>
+            <div>
+                <h6 class="text-white fw-bold mb-0">Model Quality Stable</h6>
+                <small class="text-secondary">All supported forecasting algorithms are operating within normal variance thresholds without meaningful error degradation.</small>
+            </div>
+        </div>
+    </div>
+{% endif %}
+
+<!-- Key Metrics: Live Accuracy vs Validation Baseline -->
+<div class="row g-4 mb-4">
+    <!-- Linear Regression Live Monitor Card -->
+    <div class="col-lg-6">
+        <div class="card p-4 h-100 border-0">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <div class="d-flex align-items-center gap-2">
+                    <i class="bi bi-activity text-info fs-4"></i>
+                    <div>
+                        <h5 class="fw-bold mb-0 text-white">Linear Regression</h5>
+                        <small class="text-secondary">Horizon: 1 Trading Day (Next Close)</small>
+                    </div>
+                </div>
+                {% if lr_stats.rolling_mae is not none %}
+                <span class="badge bg-info bg-opacity-25 text-info px-2 py-1">Active Tracker</span>
+                {% else %}
+                <span class="badge bg-secondary px-2 py-1">Awaiting Data</span>
+                {% endif %}
+            </div>
+
+            <div class="p-3 mb-3 rounded" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color);">
+                <div class="row text-center g-2">
+                    <div class="col-4">
+                        <small class="text-secondary d-block">Rolling MAE</small>
+                        <h4 class="fw-bold text-white mb-0 mt-1">
+                            {% if lr_stats.rolling_mae is not none %}${{ lr_stats.rolling_mae }}{% else %}N/A{% endif %}
+                        </h4>
+                        <span class="text-muted" style="font-size: 11px;">Live Out-of-Sample</span>
+                    </div>
+                    <div class="col-4 border-start border-end border-secondary">
+                        <small class="text-secondary d-block">Rolling RMSE</small>
+                        <h4 class="fw-bold text-white mb-0 mt-1">
+                            {% if lr_stats.rolling_rmse is not none %}${{ lr_stats.rolling_rmse }}{% else %}N/A{% endif %}
+                        </h4>
+                        <span class="text-muted" style="font-size: 11px;">Live Out-of-Sample</span>
+                    </div>
+                    <div class="col-4">
+                        <small class="text-secondary d-block">Direction Accuracy</small>
+                        <h4 class="fw-bold {% if lr_stats.directional_accuracy and lr_stats.directional_accuracy >= 50 %}text-success{% else %}text-warning{% endif %} mb-0 mt-1">
+                            {% if lr_stats.directional_accuracy is not none %}{{ lr_stats.directional_accuracy }}%{% else %}N/A{% endif %}
+                        </h4>
+                        <span class="text-muted" style="font-size: 11px;">Trend Accuracy</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-flex justify-content-between text-secondary" style="font-size: 13px;">
+                <span><i class="bi bi-check2-circle text-success me-1"></i> Completed Outcomes: <strong class="text-white">{{ lr_stats.resolved_count }}</strong></span>
+                <span><i class="bi bi-clock-history text-warning me-1"></i> Pending / Unresolved: <strong class="text-warning">{{ lr_stats.pending_count }}</strong> <small class="text-muted">(excluded)</small></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Random Forest Live Monitor Card -->
+    <div class="col-lg-6">
+        <div class="card p-4 h-100 border-0">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <div class="d-flex align-items-center gap-2">
+                    <i class="bi bi-tree text-success fs-4"></i>
+                    <div>
+                        <h5 class="fw-bold mb-0 text-white">Random Forest</h5>
+                        <small class="text-secondary">Horizon: 1 Trading Day (Next Close)</small>
+                    </div>
+                </div>
+                {% if rf_stats.rolling_mae is not none %}
+                <span class="badge bg-success bg-opacity-25 text-success px-2 py-1">Active Tracker</span>
+                {% else %}
+                <span class="badge bg-secondary px-2 py-1">Awaiting Data</span>
+                {% endif %}
+            </div>
+
+            <div class="p-3 mb-3 rounded" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color);">
+                <div class="row text-center g-2">
+                    <div class="col-4">
+                        <small class="text-secondary d-block">Rolling MAE</small>
+                        <h4 class="fw-bold text-white mb-0 mt-1">
+                            {% if rf_stats.rolling_mae is not none %}${{ rf_stats.rolling_mae }}{% else %}N/A{% endif %}
+                        </h4>
+                        <span class="text-muted" style="font-size: 11px;">Live Out-of-Sample</span>
+                    </div>
+                    <div class="col-4 border-start border-end border-secondary">
+                        <small class="text-secondary d-block">Rolling RMSE</small>
+                        <h4 class="fw-bold text-white mb-0 mt-1">
+                            {% if rf_stats.rolling_rmse is not none %}${{ rf_stats.rolling_rmse }}{% else %}N/A{% endif %}
+                        </h4>
+                        <span class="text-muted" style="font-size: 11px;">Live Out-of-Sample</span>
+                    </div>
+                    <div class="col-4">
+                        <small class="text-secondary d-block">Direction Accuracy</small>
+                        <h4 class="fw-bold {% if rf_stats.directional_accuracy and rf_stats.directional_accuracy >= 50 %}text-success{% else %}text-warning{% endif %} mb-0 mt-1">
+                            {% if rf_stats.directional_accuracy is not none %}{{ rf_stats.directional_accuracy }}%{% else %}N/A{% endif %}
+                        </h4>
+                        <span class="text-muted" style="font-size: 11px;">Trend Accuracy</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-flex justify-content-between text-secondary" style="font-size: 13px;">
+                <span><i class="bi bi-check2-circle text-success me-1"></i> Completed Outcomes: <strong class="text-white">{{ rf_stats.resolved_count }}</strong></span>
+                <span><i class="bi bi-clock-history text-warning me-1"></i> Pending / Unresolved: <strong class="text-warning">{{ rf_stats.pending_count }}</strong> <small class="text-muted">(excluded)</small></span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Quality Changes Over Time (Visual Trend Chart) -->
+<div class="card p-4 mb-4 border-0">
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <div>
+            <h5 class="fw-bold mb-0 text-white"><i class="bi bi-graph-up-arrow text-primary"></i> Forecast Quality Over Time</h5>
+            <small class="text-secondary">Chronological comparison of published predicted prices vs realized market closing prices</small>
+        </div>
+        <div class="d-flex gap-2">
+            <span class="badge bg-primary bg-opacity-25 text-primary">Predicted Price</span>
+            <span class="badge bg-success bg-opacity-25 text-success">Observed Actual Close</span>
+        </div>
+    </div>
+    <div style="position: relative; height: 320px;">
+        <canvas id="qualityTrendChart"></canvas>
+    </div>
+</div>
+
+<!-- History and Audit Log of Published Forecasts -->
+<div class="card p-4 border-0 mb-4">
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <div>
+            <h5 class="fw-bold mb-0 text-white"><i class="bi bi-clock-history text-primary"></i> Published Forecasts Audit Log</h5>
+            <small class="text-secondary">Unresolved forecasts are marked pending and strictly excluded from completed accuracy metrics until observed.</small>
+        </div>
+        <div class="btn-group" role="group">
+            <a href="/forecast-monitor?symbol={{ selected_symbol }}&model=all" class="btn btn-sm {% if model_filter == 'all' %}btn-primary-gradient{% else %}btn-outline-secondary text-secondary{% endif %}">All Models</a>
+            <a href="/forecast-monitor?symbol={{ selected_symbol }}&model=linear_regression" class="btn btn-sm {% if model_filter == 'linear_regression' %}btn-primary-gradient{% else %}btn-outline-secondary text-secondary{% endif %}">Linear Regression</a>
+            <a href="/forecast-monitor?symbol={{ selected_symbol }}&model=random_forest" class="btn btn-sm {% if model_filter == 'random_forest' %}btn-primary-gradient{% else %}btn-outline-secondary text-secondary{% endif %}">Random Forest</a>
+        </div>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-dark table-borderless align-middle mb-0" style="--bs-table-bg: transparent;">
+            <thead>
+                <tr class="border-bottom border-secondary text-secondary" style="font-size: 13px;">
+                    <th>Published At</th>
+                    <th>Target Date</th>
+                    <th>Asset</th>
+                    <th>Model</th>
+                    <th>Horizon</th>
+                    <th class="text-end">Base Price</th>
+                    <th class="text-end">Predicted</th>
+                    <th class="text-end">Observed</th>
+                    <th class="text-end">Abs Error</th>
+                    <th class="text-end">% Error</th>
+                    <th class="text-center">Direction</th>
+                    <th class="text-center">Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if history and history|length > 0 %}
+                    {% for item in history %}
+                    <tr class="border-bottom border-secondary border-opacity-25" style="font-size: 13.5px;">
+                        <td class="text-secondary">{{ item.created_at }}</td>
+                        <td class="text-white fw-semibold">{{ item.target_date }}</td>
+                        <td><span class="badge bg-secondary font-monospace">{{ item.symbol }}</span></td>
+                        <td>
+                            {% if item.model_name == 'linear_regression' %}
+                            <span class="text-info"><i class="bi bi-activity"></i> Linear Reg</span>
+                            {% else %}
+                            <span class="text-success"><i class="bi bi-tree"></i> Random Forest</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-secondary">{{ item.horizon }}</td>
+                        <td class="text-end text-secondary">${{ "{:,.2f}".format(item.base_price) }}</td>
+                        <td class="text-end fw-bold text-white">${{ "{:,.2f}".format(item.predicted_price) }}</td>
+                        <td class="text-end">
+                            {% if item.observed_price is not none %}
+                            <span class="fw-bold text-white">${{ "{:,.2f}".format(item.observed_price) }}</span>
+                            {% else %}
+                            <span class="text-muted fst-italic">Pending Close</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            {% if item.abs_error is not none %}
+                            <span class="text-secondary">${{ "{:,.2f}".format(item.abs_error) }}</span>
+                            {% else %}
+                            <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            {% if item.pct_error is not none %}
+                            <span class="{% if item.pct_error > 3.0 %}text-danger{% elif item.pct_error > 1.5 %}text-warning{% else %}text-success{% endif %}">
+                                {{ item.pct_error }}%
+                            </span>
+                            {% else %}
+                            <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-center">
+                            {% if item.direction_correct == 1 %}
+                            <span class="badge bg-success-subtle text-success">Hit</span>
+                            {% elif item.direction_correct == 0 %}
+                            <span class="badge bg-danger-subtle text-danger">Miss</span>
+                            {% else %}
+                            <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-center">
+                            {% if item.status == 'resolved' %}
+                            <span class="badge bg-success bg-opacity-25 text-success border border-success border-opacity-25 px-2">Resolved</span>
+                            {% else %}
+                            <span class="badge bg-warning bg-opacity-25 text-warning border border-warning border-opacity-25 px-2" title="Unresolved forecasts are excluded from live accuracy metrics">Pending</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="12" class="text-center py-4 text-muted">No published forecasts found matching criteria.</td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+// Extract chart data from history (resolved items only)
+const historyData = {{ history | tojson }};
+const resolvedItems = historyData.filter(d => d.status === 'resolved' && d.observed_price !== null).reverse();
+
+const chartLabels = resolvedItems.map(d => d.target_date + ' (' + (d.model_name === 'linear_regression' ? 'LR' : 'RF') + ')');
+const predictedPrices = resolvedItems.map(d => d.predicted_price);
+const observedPrices = resolvedItems.map(d => d.observed_price);
+
+const ctx = document.getElementById('qualityTrendChart').getContext('2d');
+new Chart(ctx, {
+    type: 'line',
+    data: {
+        labels: chartLabels,
+        datasets: [
+            {
+                label: 'Predicted Price ($)',
+                data: predictedPrices,
+                borderColor: '#3b82f6',
+                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                borderWidth: 2,
+                pointRadius: 3,
+                tension: 0.2
+            },
+            {
+                label: 'Observed Market Close ($)',
+                data: observedPrices,
+                borderColor: '#10b981',
+                backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                borderWidth: 2,
+                pointRadius: 3,
+                tension: 0.2
+            }
+        ]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                labels: { color: '#94a3b8' }
+            },
+            tooltip: {
+                callbacks: {
+                    label: function(context) {
+                        return context.dataset.label + ': $' + context.parsed.y.toFixed(2);
+                    }
+                }
+            }
+        },
+        scales: {
+            x: {
+                grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                ticks: { color: '#64748b', maxRotation: 45, minRotation: 45 }
+            },
+            y: {
+                grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                ticks: { 
+                    color: '#64748b',
+                    callback: function(val) { return '$' + val; }
+                }
+            }
+        }
+    }
+});
+
+async function syncObservedPrices() {
+    const btn = document.getElementById('syncPricesBtn');
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Checking...';
+    btn.disabled = true;
+    try {
+        const res = await fetch('/api/forecast-monitor/match?symbol={{ selected_symbol }}', { method: 'POST' });
+        const data = await res.json();
+        btn.innerHTML = '<i class="bi bi-check2"></i> Synced (' + data.resolved_count + ' matched)';
+        setTimeout(() => { window.location.reload(); }, 800);
+    } catch (err) {
+        btn.innerHTML = '<i class="bi bi-exclamation-triangle"></i> Error';
+        setTimeout(() => { btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Match Observed Prices'; }, 2000);
+    }
+}
+</script>
+
+{% endblock %}
