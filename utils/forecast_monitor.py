@@ -1,11 +1,20 @@
 import os
 import sqlite3
 import math
+import tempfile
 from datetime import datetime, date, timedelta
 import pandas as pd
 import yfinance as yf
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "forecasts.db")
+def _resolve_db_path():
+    # Vercel functions can write only to /tmp. Creating data/forecasts.db in the
+    # project directory raises EROFS while the app is imported and fails every route.
+    if os.environ.get("VERCEL"):
+        return os.path.join(tempfile.gettempdir(), "forecasts.db")
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(root, "data", "forecasts.db")
+
+DB_PATH = _resolve_db_path()
 
 def get_db_connection():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -327,7 +336,11 @@ def seed_initial_history_if_empty():
     so users can immediately inspect rolling accuracy, historical quality changes, pending vs completed,
     and deterioration flags without waiting weeks for real-time market drift.
     """
-    init_db()
+    try:
+        init_db()
+    except Exception as e:
+        print(f"Forecast store unavailable: {e}")
+        return
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) as count FROM forecasts")

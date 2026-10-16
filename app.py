@@ -1,3 +1,16 @@
+import os
+import tempfile
+
+# Point yfinance's SQLite caches at writable storage before any ticker download.
+if os.environ.get("VERCEL"):
+    try:
+        _yf_cache = os.path.join(tempfile.gettempdir(), "py-yfinance")
+        os.makedirs(_yf_cache, exist_ok=True)
+        import yfinance as _yf
+        _yf.set_tz_cache_location(_yf_cache)
+    except Exception as _cache_error:
+        print(f"yfinance cache setup skipped: {_cache_error}")
+
 from flask import Flask, render_template, request, jsonify
 from utils.stock_data import get_stock_data, get_historical_data, get_candlestick_data
 from utils.model import predict_next_price
@@ -11,7 +24,6 @@ from utils.forecast_monitor import (
 )
 
 app = Flask(__name__)
-seed_initial_history_if_empty()
 
 # Default watchlist / popular tickers
 SYMBOLS = {
@@ -144,7 +156,10 @@ def prediction():
 
 @app.route("/forecast-monitor")
 def forecast_monitor():
-    seed_initial_history_if_empty()
+    try:
+        seed_initial_history_if_empty()
+    except Exception as e:
+        print(f"Forecast seed skipped: {e}")
     symbol = request.args.get("symbol", "AAPL").upper().strip()
     model_filter = request.args.get("model", "all")
     display_symbols = SYMBOLS.copy()
